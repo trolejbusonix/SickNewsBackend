@@ -1,0 +1,55 @@
+# Limits
+max_articles_per_source: 25
+max_total_articles: 250
+
+# Global keyword filters (case-insensitive substring match on title + summary).
+# exclude: drop article if ANY keyword matches (global or category).
+# include: if any include list (global + category) is non-empty, article must match at least one.
+include_keywords: []
+exclude_keywords:
+  - "sponsored"
+
+# Per-category filters
+categories:
+  tech:
+    include_keywords: []
+    exclude_keywords: []
+  general:
+    include_keywords: []
+    exclude_keywords: []
+  ai:
+    include_keywords: []
+    exclude_keywords: []
+
+sources:
+  - id: hn
+    name: Hacker News
+    category: tech
+    url: https://hnrss.org/frontpage
+    enabled: true
+  - id: verge
+    name: The Verge
+    category: tech
+    url: https://www.theverge.com/rss/index.xml
+    enabled: true
+  - id: ars
+    name: Ars Technica
+    category: tech
+    url: https://feeds.arstechnica.com/arstechnica/index
+    enabled: true
+  - id: techcrunch
+    name: TechCrunch
+    category: tech
+    url: https://techcrunch.com/feed/
+    enabled: true
+  - id: bbc
+    name: BBC News
+    category: general
+    url: https://feeds.bbci.co.uk/news/rss.xml
+    enabled: true
+  # Google News RSS topic/search query example
+  - id: gnews_ai
+    name: Google News - AI
+    category: ai
+    url: https://news.google.com/rss/search?q=artificial+intelligence+when:2d&hl=en-US&gl=US&ceid=US:en
+    enabled: true

@@ -1,0 +1,55 @@
+name: Update feed
+
+on:
+  schedule:
+    - cron: "0 */2 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - sources.yaml
+      - fetch_news.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/cache@v6
+        with:
+          path: cache/
+          key: feed-cache-${{ github.run_id }}
+          restore-keys: feed-cache-
+
+      - run: pip install -r requirements.txt
+
+      - run: python fetch_news.py
+
+      - run: touch dist/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: github-pages
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/deploy-pages@v5
