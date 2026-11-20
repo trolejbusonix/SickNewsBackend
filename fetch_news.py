@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Lightweight RSS/Atom aggregator -> dist/feed.json"""
+"""Lightweight RSS/Atom aggregator + HTML scraper -> dist/feed.json
+
+Sources are RSS/Atom by default. `type: html` sources are scraped: links on the listing page
+that match `link_pattern` are articles, and each new article page is fetched once for its
+og:/JSON-LD metadata (title, summary, image, publish time), which is cached in SCRAPE_CACHE.
+"""
 import hashlib
 import html
 import json
@@ -8,7 +13,8 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from html.parser import HTMLParser
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import feedparser
 import requests
@@ -18,6 +24,7 @@ ROOT = Path(__file__).parent
 SOURCES_FILE = ROOT / "sources.yaml"
 STATE_FILE = ROOT / "cache" / "etag_state.json"
 ARTICLES_CACHE = ROOT / "cache" / "last_articles.json"
+SCRAPE_CACHE = ROOT / "cache" / "scrape_meta.json"
 OUT_FILE = ROOT / "dist" / "feed.json"
 
 HEADERS = {
@@ -100,7 +107,130 @@ def parse_entries(content, src, limit):
     return items
 
 
-def fetch_source(src, state, cache, limit):
+# ------------------------------------------------------------------------- HTML scraping
+
+class _PageParser(HTMLParser):
+    """Collects <a href> links with their text, and <meta> property/name -> content."""
+
+    def __init__(self, base):
+        super().__init__(convert_charrefs=True)
+        self.base, self.links, self.meta, self._open = base, [], {}, []
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == "a" and a.get("href"):
+            self._open.append([urljoin(self.base, a["href"]), a.get("title") or ""])
+        elif tag == "meta" and a.get("content"):
+            key = (a.get("property") or a.get("name") or "").lower()
+            if key and key not in self.meta:
+                self.meta[key] = a["content"]
+
+    def handle_data(self, data):
+        for link in self._open:
+            link[1] += " " + data
+
+    def handle_endtag(self, tag):
+        if tag == "a" and self._open:
+            href, text = self._open.pop()
+            self.links.append((href, WS_RE.sub(" ", text).strip()))
+
+
+# Embedded JSON (JSON-LD, Next.js/Contentful props): first publish-like key wins.
+EMBEDDED_DATE_RES = [re.compile(rf'"{k}"\s*:\s*"([^"]+)"')
+                     for k in ("datePublished", "publishDate", "publishedAt", "published_at", "dateModified")]
+TITLE_SEPS = (" | ", " - ", " – ", " — ", ": ")
+
+
+def strip_site_name(title, site):
+    """'Site | Headline' / 'Headline - Site' -> 'Headline'."""
+    if site:
+        for sep in TITLE_SEPS:
+            if title.startswith(site + sep):
+                return title[len(site + sep):]
+            if title.endswith(sep + site):
+                return title[: -len(sep + site)]
+    return title
+
+
+def _decode(r):
+    if r.encoding is None or r.encoding.lower() == "iso-8859-1":  # requests' default for text/html
+        r.encoding = r.apparent_encoding
+    return r.text
+
+
+def _iso(value):
+    try:
+        dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def article_meta(url, fallback_title):
+    """Fetches one article page and reads its og:/twitter:/JSON-LD metadata."""
+    meta = {"title": fallback_title, "summary": "", "image_url": None, "published_at": None}
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+        r.raise_for_status()
+        page = _decode(r)
+    except Exception as exc:
+        warn(f"article {url[:80]} failed ({type(exc).__name__}); using link text")
+        return meta
+    p = _PageParser(url)
+    p.feed(page)
+    m = p.meta
+    title = plain_text(m.get("og:title") or m.get("twitter:title") or fallback_title, 300)
+    meta["title"] = strip_site_name(title, m.get("og:site_name") or m.get("application-name")) or title
+    meta["summary"] = plain_text(m.get("og:description") or m.get("description") or "")
+    meta["image_url"] = m.get("og:image") or m.get("twitter:image")
+    date = m.get("article:published_time") or m.get("og:published_time")
+    dates = [date] + [mt.group(1) for rx in EMBEDDED_DATE_RES if (mt := rx.search(page))]
+    meta["published_at"] = next((iso for d in dates if d and (iso := _iso(d))), None)
+    return meta
+
+
+def scrape_entries(r, src, limit, scrape_cache):
+    """Article links on a listing page -> items. Only pages not in scrape_cache are fetched."""
+    p = _PageParser(r.url)
+    p.feed(_decode(r))
+    pattern = re.compile(src["link_pattern"])
+    min_len = int(src.get("min_title_length", 0))
+    strip = re.compile(src["title_strip"]) if src.get("title_strip") else None
+    links = {}  # url -> longest link text (cards often repeat a link as image + "Watch now")
+    for href, text in p.links:
+        url = normalize_url(href)
+        if pattern.search(url) and len(text) >= len(links.get(url, "")):
+            links[url] = text
+    links = {u: t for u, t in links.items() if len(t) >= min_len}  # drops nav links like "Key dates"
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    items = []
+    for url, text in list(links.items())[:limit]:
+        meta = scrape_cache.get(url)
+        if meta is None:
+            meta = article_meta(url, plain_text(text, 300) or url.rsplit("/", 1)[-1].replace("-", " "))
+            meta["first_seen"] = now
+            scrape_cache[url] = meta
+        items.append({
+            "id": hashlib.sha256(url.encode()).hexdigest()[:16],
+            "title": (strip.sub("", meta["title"]).strip() if strip else "") or meta["title"],
+            "url": url,
+            "source": src["name"],
+            "category": src["category"],
+            # No publish time on the page: use when we first saw it, so it doesn't look new every run.
+            "published_at": meta.get("published_at") or meta["first_seen"],
+            "summary": meta["summary"],
+            "image_url": meta["image_url"],
+        })
+    if not items:
+        raise ValueError(f"no links matched {src['link_pattern']!r}")  # layout change: keep cache
+    return items
+
+
+# ------------------------------------------------------------------------- fetching
+
+def fetch_source(src, state, cache, limit, scrape_cache):
     """Returns (source_id, items, new_state_entry)."""
     url = src["url"]
     st = dict(state.get(url) or {})
@@ -117,7 +247,10 @@ def fetch_source(src, state, cache, limit):
             st["fail_count"] = 0
             return src["id"], cached, st
         r.raise_for_status()
-        items = parse_entries(r.content, src, limit)
+        if src.get("type", "rss") == "html":
+            items = scrape_entries(r, src, limit, scrape_cache)
+        else:
+            items = parse_entries(r.content, src, limit)
         st.update(etag=r.headers.get("ETag"), last_modified=r.headers.get("Last-Modified"), fail_count=0)
         return src["id"], items, st
     except Exception as exc:  # never crash the run
@@ -127,15 +260,18 @@ def fetch_source(src, state, cache, limit):
 
 
 def matches(text, kws):
-    return any(k.lower() in text for k in kws or [])
+    """Whole-word, case-insensitive match, so "oda" doesn't hit "today"."""
+    return any(re.search(rf"\b{re.escape(k.lower())}\b", text) for k in kws or [])
 
 
-def keep(item, cfg):
+def keep(item, src, cfg):
+    """Applies global, category and per-source keyword filters."""
     cat = (cfg.get("categories") or {}).get(item["category"]) or {}
+    scopes = (cfg, cat, src)
     text = f"{item['title']} {item['summary']}".lower()
-    if matches(text, (cfg.get("exclude_keywords") or []) + (cat.get("exclude_keywords") or [])):
+    if matches(text, [k for s in scopes for k in s.get("exclude_keywords") or []]):
         return False
-    inc = (cfg.get("include_keywords") or []) + (cat.get("include_keywords") or [])
+    inc = [k for s in scopes for k in s.get("include_keywords") or []]
     return matches(text, inc) if inc else True
 
 
@@ -146,16 +282,19 @@ def main():
     sources = [s for s in cfg.get("sources", []) if s.get("enabled", True)]
     state = load_json(STATE_FILE, {})
     cache = load_json(ARTICLES_CACHE, {})
+    scrape_cache = load_json(SCRAPE_CACHE, {})
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-        results = list(ex.map(lambda s: fetch_source(s, state, cache, per_source), sources))
+        results = list(ex.map(
+            lambda s: fetch_source(s, state, cache, int(s.get("max_articles", per_source)), scrape_cache),
+            sources))
 
     new_cache, seen, articles = {}, set(), []
     for src, (sid, items, st) in zip(sources, results):
         state[src["url"]] = st
         new_cache[sid] = items
         for it in items:
-            if it["id"] not in seen and keep(it, cfg):
+            if it["id"] not in seen and keep(it, src, cfg):
                 seen.add(it["id"])
                 articles.append(it)
 
@@ -169,6 +308,9 @@ def main():
     save_json(OUT_FILE, out)
     save_json(STATE_FILE, state)
     save_json(ARTICLES_CACHE, new_cache)
+    # Keep metadata only for article URLs that are still listed, so the cache can't grow forever.
+    listed = {it["url"] for items in new_cache.values() for it in items}
+    save_json(SCRAPE_CACHE, {u: m for u, m in scrape_cache.items() if u in listed})
     print(f"Wrote {len(articles)} articles to {OUT_FILE}")
 
 

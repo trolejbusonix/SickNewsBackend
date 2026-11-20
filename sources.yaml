@@ -1,55 +1,256 @@
 # Limits
-max_articles_per_source: 25
-max_total_articles: 250
+# Per-source cap (a source can override it with `max_articles`).
+max_articles_per_source: 20
+# Keep this above (sources x per-source cap) so slow topics aren't pushed out by busy ones.
+max_total_articles: 900
 
-# Global keyword filters (case-insensitive substring match on title + summary).
-# exclude: drop article if ANY keyword matches (global or category).
-# include: if any include list (global + category) is non-empty, article must match at least one.
+# Keyword filters: case-insensitive whole-word match on title + summary.
+# exclude: drop the article if ANY keyword matches (global, category or source).
+# include: if any include list (global + category + source) is non-empty, the article
+#          must match at least one of them.
 include_keywords: []
 exclude_keywords:
   - "sponsored"
 
-# Per-category filters
+# Category names are shown as panel names in the app. Renaming one creates a new panel.
 categories:
-  tech:
-    include_keywords: []
-    exclude_keywords: []
-  general:
-    include_keywords: []
-    exclude_keywords: []
-  ai:
-    include_keywords: []
-    exclude_keywords: []
+  Harry Potter: {}
+  One Piece: {}
+  Knicks: {}
+  NBA: {}
+  World: {}
+  Poland: {}
+  Tech: {}
+  Movies & TV: {}
+  Nerd & Geek: {}
 
+# Source types:
+#   rss (default)  RSS/Atom feed at `url`.
+#   html           Scraped listing page at `url`. Links matching the `link_pattern` regex are
+#                  articles. Each new article page is fetched once for its og: metadata (title,
+#                  summary, image, publish time). Use it for sites without a usable feed.
+#                  Optional: min_title_length (link text shorter than this is navigation),
+#                  title_strip (regex removed from titles, e.g. a "Site | " prefix).
+#
+# Order matters: when two sources publish the same URL, the first one listed keeps it.
+# Topic-specific categories therefore come before the broad ones (e.g. Variety's One Piece
+# tag before Variety's main feed, ANN News filtered to One Piece before ANN All).
 sources:
-  - id: hn
-    name: Hacker News
-    category: tech
-    url: https://hnrss.org/frontpage
-    enabled: true
-  - id: verge
-    name: The Verge
-    category: tech
-    url: https://www.theverge.com/rss/index.xml
-    enabled: true
+  # ---------------------------------------------------------------- Harry Potter
+  - id: leaky_cauldron
+    name: The Leaky Cauldron
+    category: Harry Potter
+    url: https://www.the-leaky-cauldron.org/feed/
+  - id: wizarding_world
+    name: Wizarding World
+    category: Harry Potter
+    type: html
+    url: https://www.harrypotter.com/news
+    link_pattern: ^https://www\.harrypotter\.com/news/[a-z0-9-]+$
+    title_strip: '^Harry Potter \| | \| Wizarding World$'
+  - id: mugglenet
+    name: MuggleNet
+    category: Harry Potter
+    url: https://www.mugglenet.com/feed/
+  - id: hp_fan_zone
+    name: Harry Potter Fan Zone
+    category: Harry Potter
+    url: https://www.harrypotterfanzone.com/feed/
+  - id: cbr_hp
+    name: CBR
+    category: Harry Potter
+    url: https://www.cbr.com/feed/tag/harry-potter/
+  - id: guardian_hp
+    name: The Guardian
+    category: Harry Potter
+    url: https://www.theguardian.com/film/harrypotter/rss
+  - id: gnews_hp
+    name: Google News
+    category: Harry Potter
+    url: https://news.google.com/rss/search?q=%22Harry+Potter%22+OR+%22Hogwarts%22&hl=en-US&gl=US&ceid=US:en
+
+  # ---------------------------------------------------------------- One Piece
+  - id: ann_news_op
+    name: Anime News Network
+    category: One Piece
+    url: https://www.animenewsnetwork.com/news/rss.xml?ann-edition=us
+    include_keywords: ["one piece", "oda", "luffy"]
+  - id: anime_corner_op
+    name: Anime Corner
+    category: One Piece
+    url: https://animecorner.me/tag/one-piece/feed/
+  - id: gamerant_op
+    name: Game Rant
+    category: One Piece
+    url: https://gamerant.com/feed/tag/one-piece/
+  - id: cbr_op
+    name: CBR
+    category: One Piece
+    url: https://www.cbr.com/feed/tag/one-piece/
+  - id: screenrant_op
+    name: Screen Rant
+    category: One Piece
+    url: https://screenrant.com/feed/tag/one-piece/
+  - id: variety_op
+    name: Variety
+    category: One Piece
+    url: https://variety.com/t/one-piece/feed/
+  - id: gnews_op
+    name: Google News
+    category: One Piece
+    url: https://news.google.com/rss/search?q=%22One+Piece%22+%28manga+OR+anime+OR+Netflix%29&hl=en-US&gl=US&ceid=US:en
+
+  # ---------------------------------------------------------------- Knicks
+  - id: posting_toasting
+    name: Posting and Toasting
+    category: Knicks
+    url: https://www.postingandtoasting.com/rss/index.xml
+  - id: nypost_knicks
+    name: New York Post
+    category: Knicks
+    url: https://nypost.com/tag/new-york-knicks/feed/
+  - id: knickerblogger
+    name: KnickerBlogger
+    category: Knicks
+    url: https://knickerblogger.net/feed/
+  - id: gnews_knicks
+    name: Google News
+    category: Knicks
+    url: https://news.google.com/rss/search?q=%22New+York+Knicks%22&hl=en-US&gl=US&ceid=US:en
+
+  # ---------------------------------------------------------------- NBA
+  - id: nba_com
+    name: NBA.com
+    category: NBA
+    type: html
+    url: https://www.nba.com/news
+    link_pattern: ^https://www\.nba\.com/news/[a-z0-9-]+$
+    min_title_length: 25  # skips nav links (Key dates, Writers archive, NBA Guide)
+  - id: cbs_nba
+    name: CBS Sports
+    category: NBA
+    url: https://www.cbssports.com/rss/headlines/nba/
+  - id: yahoo_nba
+    name: Yahoo Sports
+    category: NBA
+    url: https://sports.yahoo.com/nba/rss/
+  - id: realgm_wiretap
+    name: RealGM Wiretap
+    category: NBA
+    url: https://basketball.realgm.com/rss/wiretap/15/0.xml
+  - id: nypost_nba
+    name: New York Post
+    category: NBA
+    url: https://nypost.com/nba/feed/
+  - id: yardbarker_nba
+    name: Yardbarker
+    category: NBA
+    url: https://www.yardbarker.com/rss/sport_merged/3
+
+  # ---------------------------------------------------------------- World
+  - id: bbc_world
+    name: BBC News
+    category: World
+    url: https://feeds.bbci.co.uk/news/world/rss.xml
+  - id: gnews_reuters
+    name: Reuters
+    category: World
+    url: https://news.google.com/rss/search?q=when:24h+site:reuters.com&ceid=US:en&hl=en-US&gl=US
+  - id: guardian_world
+    name: The Guardian
+    category: World
+    url: https://www.theguardian.com/world/rss
+  - id: dw
+    name: Deutsche Welle
+    category: World
+    url: https://rss.dw.com/rdf/rss-en-all
+  - id: aljazeera
+    name: Al Jazeera
+    category: World
+    url: https://www.aljazeera.com/xml/rss/all.xml
+
+  # ---------------------------------------------------------------- Poland
+  - id: notes_from_poland
+    name: Notes from Poland
+    category: Poland
+    url: https://notesfrompoland.com/feed/
+  - id: rmf24
+    name: RMF24
+    category: Poland
+    url: https://www.rmf24.pl/feed
+    max_articles: 10  # ~95 posts/day; keep it from flooding the panel
+  - id: tvn24
+    name: TVN24
+    category: Poland
+    url: https://www.tvn24.pl/najnowsze.xml
+    max_articles: 15
+  - id: polsat_polska
+    name: Polsat News
+    category: Poland
+    url: https://www.polsatnews.pl/rss/polska.xml
+
+  # ---------------------------------------------------------------- Tech
   - id: ars
     name: Ars Technica
-    category: tech
+    category: Tech
     url: https://feeds.arstechnica.com/arstechnica/index
-    enabled: true
+  - id: verge
+    name: The Verge
+    category: Tech
+    url: https://www.theverge.com/rss/index.xml
+  - id: hn
+    name: Hacker News
+    category: Tech
+    url: https://hnrss.org/frontpage
+  - id: 9to5google
+    name: 9to5Google
+    category: Tech
+    url: https://9to5google.com/feed/
+  - id: android_authority
+    name: Android Authority
+    category: Tech
+    url: https://www.androidauthority.com/feed/
   - id: techcrunch
     name: TechCrunch
-    category: tech
+    category: Tech
     url: https://techcrunch.com/feed/
-    enabled: true
-  - id: bbc
-    name: BBC News
-    category: general
-    url: https://feeds.bbci.co.uk/news/rss.xml
-    enabled: true
-  # Google News RSS topic/search query example
-  - id: gnews_ai
-    name: Google News - AI
-    category: ai
-    url: https://news.google.com/rss/search?q=artificial+intelligence+when:2d&hl=en-US&gl=US&ceid=US:en
-    enabled: true
+
+  # ---------------------------------------------------------------- Movies & TV
+  - id: variety
+    name: Variety
+    category: Movies & TV
+    url: https://variety.com/feed/
+  - id: thr
+    name: The Hollywood Reporter
+    category: Movies & TV
+    url: https://www.hollywoodreporter.com/feed/
+  - id: deadline
+    name: Deadline
+    category: Movies & TV
+    url: https://deadline.com/feed/
+  - id: indiewire
+    name: IndieWire
+    category: Movies & TV
+    url: https://www.indiewire.com/feed/
+
+  # ---------------------------------------------------------------- Nerd & Geek
+  - id: ign_news
+    name: IGN
+    category: Nerd & Geek
+    url: https://feeds.feedburner.com/ign/news
+  - id: gizmodo
+    name: Gizmodo
+    category: Nerd & Geek
+    url: https://gizmodo.com/feed
+  - id: pcgamer
+    name: PC Gamer
+    category: Nerd & Geek
+    url: https://www.pcgamer.com/rss/
+  - id: kotaku
+    name: Kotaku
+    category: Nerd & Geek
+    url: https://kotaku.com/feed
+  - id: ann_all
+    name: Anime News Network
+    category: Nerd & Geek
+    url: https://www.animenewsnetwork.com/all/rss.xml?ann-edition=us
